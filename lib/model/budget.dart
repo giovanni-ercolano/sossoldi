@@ -1,3 +1,4 @@
+import '../model/transaction.dart';
 import '../database/sossoldi_database.dart';
 import '../model/category_transaction.dart';
 import 'base_entity.dart';
@@ -78,11 +79,60 @@ class Budget extends BaseEntity {
       };
 }
 
+class BudgetStats extends BaseEntity {
+  final int idCategory;
+  final String? name;
+  final num amountLimit;
+  final num spent;
+
+  BudgetStats({required this.idCategory, required this.name, required this.amountLimit, required this.spent});
+
+  static BudgetStats fromJson(Map<String, Object?> json) => BudgetStats(
+      idCategory: json[BudgetFields.idCategory] as int,
+      name: json[BudgetFields.name] as String?,
+      amountLimit: json[BudgetFields.amountLimit] as num, 
+      spent: json['spent'] as num);
+
+  Map<String, Object?> toJson() => {
+        BudgetFields.idCategory: idCategory,
+        BudgetFields.name: name,
+        BudgetFields.amountLimit: amountLimit,
+        'spent': spent
+      };
+}
+
 class BudgetMethods extends SossoldiDatabase {
   Future<Budget> insert(Budget item) async {
     final db = await database;
     final id = await db.insert(budgetTable, item.toJson());
     return item.copy(id: id);
+  }
+
+  Future<Budget> insertOrUpdate(Budget item) async {
+    final db = await database;
+
+    final exists = await checkIfExists(item);
+    if (exists) {
+      await db.rawQuery("UPDATE $budgetTable SET amountLimit = ${item.amountLimit} WHERE idCategory = ${item.idCategory}");
+    } else {
+      await db.insert(budgetTable, item.toJson());
+    }
+
+    return item.copy(id: item.id);
+  }
+
+  Future<bool> checkIfExists(Budget item) async {
+    final db = await database;
+
+    try {
+      final exists = await db.rawQuery("SELECT * FROM ${budgetTable} WHERE ${item.idCategory} = idCategory");
+      if(exists.isNotEmpty) {
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
   }
 
   Future<Budget> selectById(int id) async {
@@ -118,6 +168,17 @@ class BudgetMethods extends SossoldiDatabase {
     return result.map((json) => Budget.fromJson(json)).toList();
   }
 
+  Future<List<BudgetStats>> selectMonthlyBudgetsStats() async {
+    final db = await database;
+    var query = "SELECT bt.*, SUM(t.amount) as spent FROM $budgetTable as bt "
+    + " LEFT JOIN $categoryTransactionTable as ct ON bt.${BudgetFields.idCategory} = ct.${CategoryTransactionFields.id} "
+    + " LEFT JOIN '$transactionTable' as t ON t.${TransactionFields.idCategory} = ct.${CategoryTransactionFields.id} " 
+    + " WHERE bt.active = 1 AND strftime('%m', t.date) = strftime('%m', 'now') AND strftime('%Y', t.date) = strftime('%Y', 'now') "
+    + " GROUP BY bt.${BudgetFields.idCategory};";
+    final result = await db.rawQuery(query);
+    return result.map((json) => BudgetStats.fromJson(json)).toList();
+  }
+
   Future<int> updateItem(Budget item) async {
     final db = await database;
 
@@ -134,5 +195,11 @@ class BudgetMethods extends SossoldiDatabase {
     final db = await database;
 
     return await db.delete(budgetTable, where: '${BudgetFields.id} = ?', whereArgs: [id]);
+  }
+
+  Future<int> deleteByCategory(int id) async {
+    final db = await database;
+
+    return await db.delete(budgetTable, where: '${BudgetFields.idCategory} = ?', whereArgs: [id]);
   }
 }
